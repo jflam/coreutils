@@ -90,7 +90,7 @@ Usage: %s [OPTION]... [FILE]...\n\
 "),
               program_name);
       fputs (_("\
-Concatenate FILE(s) to standard output.\n\
+Upside Down Concatenate FILE(s) to standard output.\n\
 "), stdout);
 
       emit_stdin_note ();
@@ -145,6 +145,82 @@ next_line_num (void)
     line_num_print--;
 }
 
+// Lookup tables. 0xff are filler bytes
+
+static char lowercase[] = {
+  0xc9, 0x90, // a
+  0x71, 0xff, // b (q)
+  0xc9, 0x94, // c
+  0x70, 0xff, // d (p)
+  0xc7, 0x9d, // e
+  0xc9, 0x9f, // f
+  0xc6, 0x83, // g
+  0xc9, 0xa5, // h
+  0xc4, 0xb1, // i
+  0xc9, 0xbe, // j
+  0xca, 0x9e, // k
+  0xca, 0x83, // l
+  0xc9, 0xaf, // m
+  0x75, 0xff, // n (u)
+  0x6f, 0xff, // o (o)
+  0x64, 0xff, // p (d)
+  0x62, 0xff, // q (b)
+  0xc9, 0xb9, // r
+  0x73, 0xff, // s (s)
+  0xca, 0x87, // t
+  0x6e, 0xff, // u (n)
+  0xca, 0x8c, // v
+  0xca, 0x8d, // w
+  0x78, 0xff, // x
+  0xca, 0x8e, // y
+  0x7a, 0xff, // z
+};
+
+static char uppercase[] = {
+  0xe2, 0x88, 0x80, 0xff, // A
+  0xf0, 0x90, 0x90, 0x92, // B
+  0xe2, 0x86, 0x83, 0xff, // C
+  0xe2, 0x97, 0x96, 0xff, // D
+  0xc6, 0x8e, 0xff, 0xff, // E
+  0xe2, 0x84, 0xb2, 0xff, // F
+  0xe2, 0x85, 0x81, 0xff, // G
+  0x48, 0xff, 0xff, 0xff, // H
+  0x49, 0xff, 0xff, 0xff, // I
+  0xc5, 0xbf, 0xff, 0xff, // J
+  0xe2, 0x8b, 0x8a, 0xff, // K
+  0xe2, 0x85, 0x82, 0xff, // L
+  0x57, 0xff, 0xff, 0xff, // M
+  0xe1, 0xb4, 0x8e, 0xff, // N
+  0x4f, 0xff, 0xff, 0xff, // O
+  0xd4, 0x80, 0xff, 0xff, // P
+  0xce, 0x8c, 0xff, 0xff, // Q
+  0xe1, 0xb4, 0x9a, 0xff, // R
+  0x53, 0xff, 0xff, 0xff, // S
+  0xe2, 0x8a, 0xa5, 0xff, // T
+  0xe2, 0x88, 0xa9, 0xff, // U
+  0xe1, 0xb4, 0xa7, 0xff, // V
+  0x4d, 0xff, 0xff, 0xff, // W
+  0x58, 0xff, 0xff, 0xff, // X
+  0xe2, 0x85, 0x84, 0xff, // Y
+  0x5a, 0xff, 0xff, 0xff, // Z
+};
+
+/* Determine size of UTF-8 character by inspecting first byte */
+
+__attribute__ ((pure)) static size_t
+char_size(const char *pchar) {
+  if ((*pchar & 0b10000000) == 0) {
+    return 1;
+  } else if ((*pchar & 0b11100000) == 0b11000000) {
+    return 2;
+  } else if ((*pchar & 0b11110000) == 0b11100000) {
+    return 3;
+  } else if ((*pchar & 0b11111000) == 0b11110000) {
+    return 4;
+  }
+  die (EXIT_FAILURE, 1, _("unexpected UTF-8 encoding"));
+}
+
 /* Plain cat.  Copies the file behind 'input_desc' to STDOUT_FILENO.
    Return true if successful.  */
 
@@ -178,13 +254,48 @@ simple_cat (
       if (n_read == 0)
         return true;
 
-      /* Write this block out.  */
+      /* Compute the size of the unicode buffer */
 
+      size_t uclen = 0;
+      for (int i = 0; i < n_read; i++) {
+        char c = buf[i];
+        char *puc = &buf[i];
+        if (c >= 'A' && c <= 'Z') {
+          puc = uppercase + (c - 'A') * 4;
+        } else if (c >= 'a' && c <= 'z') {
+          puc = lowercase + (c - 'a') * 2;
+        }
+        uclen += char_size(puc);
+      }
+
+      /* Allocate unibuf and copy unicode characters into it */
+
+      char *unibuf = xmalloc (uclen);
+      if (unibuf == 0) {
+        die (EXIT_FAILURE, errno, _("out of memory error"));
+      }
+
+      int unibuf_offset = 0;
+      for (int i = 0; i < n_read; i++) {
+        char c = buf[i];
+        char *puc = &buf[i];
+        if (c >= 'A' && c <= 'Z') {
+          puc = uppercase + (c - 'A') * 4;
+        } else if (c >= 'a' && c <= 'z') {
+          puc = lowercase + (c - 'a') * 2;
+        }
+        size_t clen = char_size (puc);
+        for (size_t j = 0; j < clen; j++) {
+          unibuf[unibuf_offset++] = puc[j];
+        }
+      }
       {
         /* The following is ok, since we know that 0 < n_read.  */
-        size_t n = n_read;
-        if (full_write (STDOUT_FILENO, buf, n) != n)
+        size_t n = uclen;
+        if (full_write (STDOUT_FILENO, unibuf, n) != n)
           die (EXIT_FAILURE, errno, _("write error"));
+
+        free (unibuf);
       }
     }
 }
